@@ -1,0 +1,33 @@
+# Arquivos de Ambiente
+.env
+
+# Cache do Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Diretórios de Dados/Uploads/Saída
+audios/
+videos/
+transcricoes/
+transcriptions/ # Adicionado para garantir (vimos nos logs iniciais)
+uploads/        # Adicionado para garantir
+generated_audio/ # Adicionado para garantir
+tmp/            # Adicionado para garantir
+
+# Executáveis
+*.exe
+
+# Arquivos de Mídia específicos de teste (opcional, mas bom)
+*.mp3
+*.wav
+*.mp4
+# Adicione outras extensões se necessário
+
+# Arquivos específicos de IDEs (Exemplos)
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log 

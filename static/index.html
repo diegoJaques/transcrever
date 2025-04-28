@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcrição de Vídeos</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .input-section {
+            margin-bottom: 20px;
+        }
+
+        .tab-buttons {
+            display: flex;
+            margin-bottom: 20px;
+            gap: 10px;
+        }
+
+        .tab-button {
+            padding: 10px 20px;
+            border: none;
+            background-color: #e0e0e0;
+            cursor: pointer;
+            border-radius: 5px;
+            flex: 1;
+        }
+
+        .tab-button.active {
+            background-color: #007bff;
+            color: white;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        input[type="text"], input[type="file"] {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 100%;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #fff;
+            white-space: pre-wrap;
+        }
+
+        .loading {
+            text-align: center;
+            margin: 20px 0;
+            display: none;
+        }
+
+        .loading::after {
+            content: "⏳";
+            animation: loading 1s infinite;
+        }
+
+        @keyframes loading {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Transcrição de Vídeos</h1>
+        
+        <div class="tab-buttons">
+            <button class="tab-button active" onclick="showTab('file')">Arquivo de Vídeo</button>
+            <button class="tab-button" onclick="showTab('youtube')">Link do YouTube</button>
+        </div>
+
+        <div id="file-input" class="input-section">
+            <div class="input-group">
+                <input type="file" id="video-file" accept="video/*">
+                <button onclick="transcribeFile()">Transcrever Arquivo</button>
+            </div>
+        </div>
+
+        <div id="youtube-input" class="input-section" style="display: none;">
+            <div class="input-group">
+                <input type="text" id="youtube-url" placeholder="Cole o link do YouTube aqui">
+                <button onclick="transcribeYoutube()">Transcrever YouTube</button>
+            </div>
+        </div>
+
+        <div class="loading" id="loading">Processando...</div>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        function showTab(tab) {
+            document.querySelectorAll('.tab-button').forEach(button => button.classList.remove('active'));
+            document.querySelectorAll('.input-section').forEach(section => section.style.display = 'none');
+            
+            if (tab === 'file') {
+                document.querySelector('#file-input').style.display = 'block';
+                document.querySelector('.tab-button:first-child').classList.add('active');
+            } else {
+                document.querySelector('#youtube-input').style.display = 'block';
+                document.querySelector('.tab-button:last-child').classList.add('active');
+            }
+        }
+
+        async function transcribeFile() {
+            const fileInput = document.getElementById('video-file');
+            if (!fileInput.files.length) {
+                alert('Por favor, selecione um arquivo de vídeo.');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+
+            await transcribe('/transcribe-file', formData);
+        }
+
+        async function transcribeYoutube() {
+            const url = document.getElementById('youtube-url').value.trim();
+            if (!url) {
+                alert('Por favor, insira um link do YouTube.');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('url', url);
+
+            await transcribe('/transcribe-youtube', formData);
+        }
+
+        async function transcribe(endpoint, formData) {
+            const loading = document.getElementById('loading');
+            const result = document.getElementById('result');
+            
+            try {
+                loading.style.display = 'block';
+                result.textContent = '';
+
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('Erro ao processar o vídeo');
+                }
+
+                const data = await response.json();
+                result.textContent = data.transcription;
+            } catch (error) {
+                result.textContent = `Erro: ${error.message}`;
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html> 

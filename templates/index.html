@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Transcrição de Vídeos</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}">
+</head>
+<body>
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="card shadow">
+                    <div class="card-header bg-primary text-white">
+                        <h2 class="text-center mb-0">🎥 Sistema de Transcrição de Vídeos</h2>
+                    </div>
+                    <div class="card-body">
+                        <!-- Seletor de Modelo -->
+                        <div class="mb-4">
+                            <label for="modelo-select" class="form-label">Modelo de Transcrição</label>
+                            <select class="form-select" id="modelo-select">
+                                {% for key, value in modelos.items() %}
+                                <option value="{{ key }}" {% if key == modelo_atual %}selected{% endif %}>{{ value }}</option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-text">Modelos maiores são mais precisos mas mais lentos</div>
+                        </div>
+
+                        <!-- Lista de Transcrições -->
+                        <div id="lista-transcricoes" class="mb-4 d-none">
+                            <h5>Suas Transcrições</h5>
+                            <div class="list-group" id="transcricoes-container">
+                                <!-- As transcrições serão adicionadas dinamicamente aqui -->
+                            </div>
+                        </div>
+
+                        <!-- Tabs -->
+                        <ul class="nav nav-tabs mb-4" id="myTab" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="youtube-tab" data-bs-toggle="tab" data-bs-target="#youtube" type="button" role="tab">YouTube</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="arquivo-tab" data-bs-toggle="tab" data-bs-target="#arquivo" type="button" role="tab">Arquivo Local</button>
+                            </li>
+                        </ul>
+
+                        <!-- Tab Content -->
+                        <div class="tab-content" id="myTabContent">
+                            <!-- YouTube Tab -->
+                            <div class="tab-pane fade show active" id="youtube" role="tabpanel">
+                                <form id="youtube-form">
+                                    <div class="mb-3">
+                                        <label for="youtube-url" class="form-label">URL do YouTube</label>
+                                        <input type="url" class="form-control" id="youtube-url" required>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary w-100">Transcrever</button>
+                                </form>
+                            </div>
+
+                            <!-- Arquivo Local Tab -->
+                            <div class="tab-pane fade" id="arquivo" role="tabpanel">
+                                <form id="arquivo-form" class="mb-4">
+                                    <div class="mb-3">
+                                        <label for="video-file" class="form-label">Selecione um arquivo de áudio/vídeo</label>
+                                        <input type="file" class="form-control" id="video-file" accept=".mp3,.wav,.mp4,.avi,.mkv,.mov,.m4a,.ogg,.webm" required>
+                                        <div class="form-text">
+                                            Formatos suportados:
+                                            <ul class="mt-1 mb-0">
+                                                <li>Áudio: WAV (recomendado), MP3, M4A, OGG</li>
+                                                <li>Vídeo: MP4, AVI, MKV, MOV, WEBM</li>
+                                            </ul>
+                                            <small class="text-muted">* Arquivos WAV são processados diretamente, outros formatos serão convertidos automaticamente.</small>
+                                        </div>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="bi bi-file-earmark-music"></i> Iniciar Transcrição
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <!-- Barra de progresso -->
+                        <div class="card mb-4 d-none" id="progress-container">
+                            <div class="card-body">
+                                <h5 class="card-title">Progresso da Transcrição</h5>
+                                <div class="progress">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                                </div>
+                                <p id="status-text" class="mt-2">Processando...</p>
+                                <div class="d-flex justify-content-end">
+                                    <button id="btn-cancel" class="btn btn-sm btn-danger">Cancelar</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Resultados -->
+                        <div class="card mb-4">
+                            <div class="card-body">
+                                <h5 class="card-title" id="transcricao-titulo">Nenhuma transcrição disponível</h5>
+                                <div class="d-flex justify-content-end mb-3">
+                                    <button id="btn-retomar" class="btn btn-warning me-2 d-none">
+                                        <i class="bi bi-arrow-clockwise"></i> Retomar Transcrição
+                                    </button>
+                                    <button id="btn-baixar" class="btn btn-primary me-2 d-none">
+                                        <i class="bi bi-download"></i> Baixar Transcrição
+                                    </button>
+                                    <button id="btn-falar" class="btn btn-info me-2 d-none">
+                                        <i class="bi bi-volume-up"></i> Converter para Fala
+                                    </button>
+                                    <button id="gerar-insights" class="btn btn-success" disabled>
+                                        <i class="bi bi-lightbulb"></i> Gerar Insights
+                                    </button>
+                                </div>
+                                
+                                <!-- Área para reprodução de áudio -->
+                                <div id="audio-player" class="mb-3 d-none">
+                                    <h6>Áudio Gerado:</h6>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <audio controls class="w-100" id="audio-element">
+                                            Seu navegador não suporta o elemento de áudio.
+                                        </audio>
+                                        <button id="btn-baixar-audio" class="btn btn-primary">
+                                            <i class="bi bi-download"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Área para exibir mensagens de ajuda para retomada -->
+                                <div id="area-retomada"></div>
+                                
+                                <div class="mb-4">
+                                    <h6>Texto da Transcrição:</h6>
+                                    <div id="transcricao-texto" class="form-control" style="height: 300px; overflow-y: auto;">Nenhuma transcrição disponível</div>
+                                </div>
+                                
+                                <div>
+                                    <h6>Insights Gerados:</h6>
+                                    <div id="insights-texto" class="form-control" style="height: 300px; overflow-y: auto;">Nenhum insight disponível. Clique em "Gerar Insights" após a transcrição.</div>
+                                </div>
+
+                                <!-- Seção para Perguntas à IA (Adicionado) -->
+                                <div id="ask-ai-section" class="mt-4 d-none">
+                                    <h6>Pergunte à IA sobre a Transcrição</h6>
+                                    <div class="mb-3">
+                                        <label for="ai-question-input" class="form-label">Sua pergunta:</label>
+                                        <textarea class="form-control" id="ai-question-input" rows="3" placeholder="Ex: Quais foram os principais tópicos discutidos? Faça um resumo."></textarea>
+                                    </div>
+                                    <button id="ask-ai-button" class="btn btn-info" disabled>
+                                        <i class="bi bi-send"></i> Enviar Pergunta
+                                    </button>
+                                    <div id="ai-response-area" class="mt-3 p-3 border rounded bg-light" style="min-height: 100px; white-space: pre-wrap;">
+                                        <!-- A resposta da IA aparecerá aqui -->
+                                    </div>
+                                </div>
+
+                            </div>
+                        </div>
+
+                        <!-- Adicionar antes do final da div de resultados -->
+                        <div id="clonagem-voz-section" class="mt-4 d-none">
+                            <div class="card">
+                                <div class="card-header bg-primary text-white">
+                                    <h5 class="mb-0">
+                                        <i class="bi bi-mic"></i> Clonar Voz
+                                    </h5>
+                                </div>
+                                <div class="card-body">
+                                    <form id="clonagem-voz-form">
+                                        <div class="mb-3">
+                                            <label for="amostra-voz" class="form-label">Amostra da sua voz (arquivo WAV)</label>
+                                            <input type="file" class="form-control" id="amostra-voz" accept=".wav" required>
+                                            <div class="form-text">
+                                                Grave um áudio curto (15-30 segundos) com sua voz para ser usado como referência.
+                                                O áudio deve estar em formato WAV e ter boa qualidade.
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">Texto a ser convertido em áudio</label>
+                                            <textarea class="form-control" id="texto-para-audio" rows="4" readonly></textarea>
+                                        </div>
+                                        <div class="d-flex gap-2">
+                                            <button type="submit" class="btn btn-primary">
+                                                <i class="bi bi-soundwave"></i> Gerar Áudio
+                                            </button>
+                                            <button type="button" id="btn-play-audio" class="btn btn-success d-none">
+                                                <i class="bi bi-play-circle"></i> Reproduzir
+                                            </button>
+                                            <button type="button" id="btn-download-audio" class="btn btn-info d-none">
+                                                <i class="bi bi-download"></i> Baixar Áudio
+                                            </button>
+                                        </div>
+                                    </form>
+                                    <div id="audio-status" class="mt-3"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', path='/script.js') }}"></script>
+</body>
+</html> 

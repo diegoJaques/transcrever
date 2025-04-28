@@ -1,0 +1,208 @@
+body {
+    background-color: #f8f9fa;
+}
+
+.card {
+    border: none;
+    border-radius: 15px;
+}
+
+.card-header {
+    border-radius: 15px 15px 0 0 !important;
+    background-color: #0d6efd !important;
+}
+
+.progress {
+    height: 25px;
+    border-radius: 12px;
+    background-color: #e9ecef;
+}
+
+.progress-bar {
+    background-color: #0d6efd;
+    border-radius: 12px;
+}
+
+#resultados {
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+#transcricao-texto, #insights-texto {
+    white-space: pre-wrap;
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+.nav-tabs .nav-link {
+    border: none;
+    color: #6c757d;
+    font-weight: 500;
+    padding: 10px 20px;
+    border-radius: 8px;
+    margin-right: 5px;
+}
+
+.nav-tabs .nav-link.active {
+    background-color: #0d6efd;
+    color: white;
+}
+
+.btn {
+    border-radius: 8px;
+    padding: 8px 20px;
+    font-weight: 500;
+}
+
+.form-control {
+    border-radius: 8px;
+    padding: 10px 15px;
+}
+
+.form-control:focus {
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+}
+
+#progress-container {
+    background-color: #f8f9fa;
+    padding: 20px;
+    border-radius: 10px;
+}
+
+#status-text {
+    color: #6c757d;
+    font-size: 0.9rem;
+}
+
+/* Animações */
+@keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); }
+}
+
+.progress-bar-animated {
+    animation: pulse 1.5s infinite;
+}
+
+/* Responsividade */
+@media (max-width: 768px) {
+    .container {
+        padding: 10px;
+    }
+    
+    .card {
+        margin: 10px;
+    }
+    
+    .nav-tabs .nav-link {
+        padding: 8px 15px;
+    }
+}
+
+/* Adicionando estilos para o histórico de status */
+.status-historico {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+    padding: 8px;
+    margin-top: 10px;
+    max-height: 150px;
+    overflow-y: auto;
+    font-size: 0.85rem;
+}
+
+.status-historico div {
+    margin-bottom: 5px;
+    padding-bottom: 5px;
+    border-bottom: 1px dotted #dee2e6;
+}
+
+.status-historico .badge {
+    margin-right: 5px;
+    font-size: 0.7rem;
+    padding: 3px 6px;
+}
+
+.status-historico small {
+    color: #6c757d;
+    margin-right: 5px;
+}
+
+/* Melhorando o estilo da alert box para retomada */
+.alert-warning.mt-3 {
+    border-left: 4px solid #ffc107;
+    background-color: rgba(255, 193, 7, 0.1);
+}
+
+.alert-warning h5 {
+    color: #856404;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+}
+
+.alert-warning h5 i {
+    margin-right: 10px;
+}
+
+.alert-warning p {
+    color: #6c5328;
+    margin-bottom: 5px;
+}
+
+/* Melhorando o destaque para o botão de retomar */
+#btn-retomar {
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
+    }
+    70% {
+        box-shadow: 0 0 0 10px rgba(255, 193, 7, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(255, 193, 7, 0);
+    }
+}
+
+/* Estilo para progresso de transcrição */
+.progress {
+    height: 20px;
+    margin-bottom: 10px;
+    overflow: hidden;
+    background-color: #e9ecef;
+    border-radius: 0.25rem;
+}
+
+.progress-bar {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+    color: #fff;
+    text-align: center;
+    white-space: nowrap;
+    background-color: #0d6efd;
+    transition: width 0.6s ease;
+}
+
+.progress-bar-striped {
+    background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.15) 50%, rgba(255, 255, 255, 0.15) 75%, transparent 75%, transparent);
+    background-size: 1rem 1rem;
+}
+
+.progress-bar-animated {
+    animation: progress-bar-stripes 1s linear infinite;
+}
+
+@keyframes progress-bar-stripes {
+    from {
+        background-position: 1rem 0;
+    }
+    to {
+        background-position: 0 0;
+    }
+} 
