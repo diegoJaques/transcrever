@@ -273,21 +273,8 @@ def baixar_audio_youtube(url):
                     
             except Exception as alt_e:
                 print(f"Erro no método alternativo: {str(alt_e)}")
-                
-                # Todas as tentativas falharam, retorna uma mensagem amigável
-                error_msg = str(e)
-                if "403: Forbidden" in error_msg:
-                    error_msg = "Este vídeo está bloqueado ou protegido pelo YouTube. Tente outro vídeo."
-                elif "private" in error_msg.lower():
-                    error_msg = "Este vídeo é privado e não pode ser acessado."
-                elif "copyright" in error_msg.lower():
-                    error_msg = "Este vídeo está protegido por direitos autorais."
-                elif "unavailable" in error_msg.lower():
-                    error_msg = "Este vídeo não está disponível para download."
-                else:
-                    error_msg = "Não foi possível baixar este vídeo do YouTube. Por favor, tente outro vídeo."
-                    
-                raise HTTPException(status_code=500, detail=error_msg)
+                # Propaga a última exceção ocorrida (alt_e ou pytube_error ou e)
+                raise alt_e
 
 def extrair_audio_video(caminho_video):
     try:
