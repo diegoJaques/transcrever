@@ -109,172 +109,110 @@ def criar_diretorios():
     for dir in diretorios:
         os.makedirs(dir, exist_ok=True)
 
-def baixar_audio_youtube_pytube(url):
-    """Método alternativo para baixar áudio do YouTube usando pytube"""
-    try:
-        # Cria diretório audios se não existir
-        os.makedirs('audios', exist_ok=True)
-        
-        # Gera um ID único para o download
-        download_id = str(uuid.uuid4())
-        
-        print(f"Iniciando download com pytube: {url}")
-        
-        # Cria o objeto YouTube
-        yt = pytube.YouTube(url)
-        
-        # Obtém o título do vídeo
-        video_title = yt.title
-        print(f"Título: {video_title}")
-        
-        # Seleciona o stream de áudio com maior qualidade
-        audio_stream = yt.streams.filter(only_audio=True).first()
-        if not audio_stream:
-            raise Exception("Nenhum stream de áudio disponível para este vídeo")
-            
-        # Baixa o arquivo
-        print(f"Baixando stream: {audio_stream}")
-        filename = audio_stream.download(output_path='audios', filename=f"audio_{download_id}")
-        
-        # Verifica se o download foi bem-sucedido
-        if not os.path.exists(filename):
-            raise Exception(f"Falha ao baixar o arquivo: {filename}")
-            
-        print(f"Arquivo baixado: {filename}")
-        
-        # Converter para MP3 se não for MP3
-        output_mp3 = f"audios/audio_{download_id}.mp3"
-        if not filename.endswith('.mp3'):
-            print(f"Convertendo para MP3: {filename} -> {output_mp3}")
-            comando = f'ffmpeg -y -i "{filename}" -vn -acodec mp3 "{output_mp3}"'
-            os.system(comando)
-            
-            # Verifica se a conversão foi bem-sucedida
-            if os.path.exists(output_mp3):
-                # Remove o arquivo original
-                os.remove(filename)
-                filename = output_mp3
-            else:
-                print(f"Aviso: Falha na conversão para MP3. Usando o arquivo original.")
-        
-        print(f"Download com pytube concluído: {filename}")
-        return filename, video_title
-        
-    except Exception as e:
-        print(f"Erro ao baixar com pytube: {str(e)}")
-        raise Exception(f"Falha no download com pytube: {str(e)}")
-
 def baixar_audio_youtube(url):
-    try:
-        # Cria diretório audios se não existir
-        os.makedirs('audios', exist_ok=True)
-        
-        # Gera um ID único para o download
-        download_id = str(uuid.uuid4())
-        filename = f"audios/audio_{download_id}.mp3"
-        
-        print(f"Iniciando download do YouTube: {url}")
-        
-        # Configuração robusta para contornar restrições
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': f'audios/audio_{download_id}.%(ext)s',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'geo_bypass': True,
-            'geo_bypass_country': 'US',
-            'geo_bypass_ip_block': '8.8.8.8',
-            'nocheckcertificate': True,
-            'ignoreerrors': False,
-            'noplaylist': True,  # Apenas o vídeo, não a playlist inteira
-            'source_address': '0.0.0.0',
-            'force_generic_extractor': False,
-            'sleep_interval': 1,  # Espera entre requisições
-            'max_sleep_interval': 5,
-            'external_downloader_args': ['-timeout', '10'],
-            'extractor_retries': 5,
-            'file_access_retries': 5,
-            'fragment_retries': 5,
-            'retry_sleep_functions': {'http': lambda n: 5},
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-us,en;q=0.5',
-                'Sec-Fetch-Mode': 'navigate',
-            },
-        }
+    # Cria diretório audios se não existir
+    os.makedirs('audios', exist_ok=True)
+    download_id = str(uuid.uuid4())
+    last_error = None
 
+    # --- Tentativa 1: yt-dlp (Principal) ---
+    print(f"Iniciando download do YouTube (Tentativa 1 - yt-dlp principal): {url}")
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': f'audios/audio_{download_id}.%(ext)s',
+        'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
+        'geo_bypass': True, 'geo_bypass_country': 'US', 'geo_bypass_ip_block': '8.8.8.8',
+        'nocheckcertificate': True, 'ignoreerrors': False, 'noplaylist': True,
+        'source_address': '0.0.0.0', 'force_generic_extractor': False,
+        'sleep_interval': 1, 'max_sleep_interval': 5,
+        'external_downloader_args': ['-timeout', '10'],
+        'extractor_retries': 5, 'file_access_retries': 5, 'fragment_retries': 5,
+        'retry_sleep_functions': {'http': lambda n: 5},
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5', 'Sec-Fetch-Mode': 'navigate',
+        },
+    }
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             print("Extraindo informações do vídeo...")
-            try:
-                info_dict = ydl.extract_info(url, download=True)
+            info_dict = ydl.extract_info(url, download=True)
+            if not info_dict:
+                raise Exception("Não foi possível obter informações do vídeo (info_dict vazio)")
+            video_title = info_dict.get('title', 'Video sem título')
+            possible_files = glob.glob(f'audios/audio_{download_id}.*')
+            if not possible_files:
+                raise Exception("Arquivo de áudio não foi criado após o download (yt-dlp principal)")
+            actual_file = possible_files[0]
+            print(f"Download (Tentativa 1) concluído com sucesso: {actual_file}")
+            return actual_file, video_title
+    except Exception as e:
+        print(f"Tentativa 1 (yt-dlp principal) falhou: {e}")
+        last_error = e
+
+    # --- Tentativa 2: pytube ---
+    if last_error: # Só tenta se a anterior falhou
+        print("Tentando download alternativo (Tentativa 2 - pytube)...")
+        try:
+            # (Código de baixar_audio_youtube_pytube adaptado)
+            yt = pytube.YouTube(url)
+            video_title = yt.title
+            audio_stream = yt.streams.filter(only_audio=True).first()
+            if not audio_stream:
+                raise Exception("Nenhum stream de áudio disponível (pytube)")
+            filename_pytube = audio_stream.download(output_path='audios', filename=f"audio_{download_id}_pytube") # Nome diferente para evitar conflito
+            if not os.path.exists(filename_pytube):
+                 raise Exception(f"Falha ao baixar o arquivo (pytube): {filename_pytube}")
+            output_mp3 = f"audios/audio_{download_id}.mp3"
+            if not filename_pytube.endswith('.mp3'):
+                print(f"Convertendo para MP3 (pytube): {filename_pytube} -> {output_mp3}")
+                comando = f'ffmpeg -y -i "{filename_pytube}" -vn -acodec mp3 "{output_mp3}"'
+                os.system(comando)
+                if os.path.exists(output_mp3):
+                    os.remove(filename_pytube)
+                    actual_file = output_mp3
+                else:
+                     raise Exception("Falha na conversão para MP3 (pytube)")
+            else:
+                # Se já for mp3 (raro), renomeia para o padrão
+                os.rename(filename_pytube, output_mp3)
+                actual_file = output_mp3
+            print(f"Download (Tentativa 2 - pytube) concluído com sucesso: {actual_file}")
+            return actual_file, video_title
+        except Exception as e_pytube:
+            print(f"Tentativa 2 (pytube) falhou: {e_pytube}")
+            last_error = e_pytube
+
+    # --- Tentativa 3: yt-dlp (Alternativo) ---
+    if last_error: # Só tenta se as anteriores falharam
+        print("Tentando download alternativo (Tentativa 3 - yt-dlp alternativo)...")
+        alt_opts = {
+            'format': 'bestaudio', 'outtmpl': f'audios/audio_{download_id}.%(ext)s',
+            'noplaylist': True, 'geo_bypass': True, 'nocheckcertificate': True,
+            'ignoreerrors': False, 'quiet': False, 'no_warnings': False,
+            'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36'},
+        }
+        try:
+            with yt_dlp.YoutubeDL(alt_opts) as ydl_alt:
+                info_dict = ydl_alt.extract_info(url, download=True)
                 if not info_dict:
-                    raise Exception("Não foi possível obter informações do vídeo")
-                
+                     raise Exception("Não foi possível obter informações do vídeo (info_dict vazio - alt)")
                 video_title = info_dict.get('title', 'Video sem título')
-                
-                # Procura o arquivo gerado
                 possible_files = glob.glob(f'audios/audio_{download_id}.*')
                 if not possible_files:
-                    raise Exception("Arquivo de áudio não foi criado após o download")
-                    
-                # Usa o primeiro arquivo encontrado (normalmente será o MP3)
+                    raise Exception("Arquivo de áudio não foi criado após o download (yt-dlp alternativo)")
                 actual_file = possible_files[0]
-                print(f"Arquivo criado: {actual_file}")
-            
-                print(f"Download concluído com sucesso: {actual_file}")
+                print(f"Download (Tentativa 3 - yt-dlp alternativo) concluído com sucesso: {actual_file}")
                 return actual_file, video_title
-            except Exception as e:
-                print(f"Erro na extração de informações: {str(e)}")
-                raise
-        
-    except Exception as e:
-        print(f"Erro ao baixar vídeo: {str(e)}")
-        
-        # Tenta usar o método alternativo com pytube
-        try:
-            print("Tentando download alternativo com pytube...")
-            return baixar_audio_youtube_pytube(url)
-        except Exception as pytube_error:
-            print(f"Erro no pytube: {str(pytube_error)}")
-            
-            # Tenta usar métodos alternativos do yt-dlp
-            try:
-                print("Tentando método alternativo de download com yt-dlp...")
-                alt_opts = {
-                    'format': 'bestaudio',
-                    'outtmpl': f'audios/audio_{download_id}.%(ext)s',
-                    'noplaylist': True,
-                    'geo_bypass': True,
-                    'nocheckcertificate': True,
-                    'ignoreerrors': False,
-                    'quiet': False,
-                    'no_warnings': False,
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
-                    },
-                }
-                
-                with yt_dlp.YoutubeDL(alt_opts) as ydl:
-                    info_dict = ydl.extract_info(url, download=True)
-                    video_title = info_dict.get('title', 'Video sem título')
-                    
-                    # Procura o arquivo gerado
-                    possible_files = glob.glob(f'audios/audio_{download_id}.*')
-                    if possible_files:
-                        actual_file = possible_files[0]
-                        print(f"Download alternativo bem-sucedido: {actual_file}")
-                        return actual_file, video_title
-                    else:
-                        raise Exception("Não foi possível baixar o vídeo com método alternativo")
-                    
-            except Exception as alt_e:
-                print(f"Erro no método alternativo: {str(alt_e)}")
-                # Propaga a última exceção ocorrida (alt_e ou pytube_error ou e)
-                raise alt_e
+        except Exception as e_alt:
+            print(f"Tentativa 3 (yt-dlp alternativo) falhou: {e_alt}")
+            last_error = e_alt
+
+    # --- Falha Total ---
+    print(f"Todas as tentativas de download para {url} falharam.")
+    # Levanta a última exceção ocorrida para ser tratada pela função chamadora
+    raise last_error
 
 def extrair_audio_video(caminho_video):
     try:
