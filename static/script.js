@@ -309,7 +309,8 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        const wsUrl = `ws://${window.location.host}/ws/${clientId}`;
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/${clientId}`;
         ws = new WebSocket(wsUrl);
         console.log(`Tentando conectar a: ${wsUrl}`);
         adicionarStatusHistorico("Conectando para receber atualizações...", "info");
