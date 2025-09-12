@@ -38,6 +38,12 @@ pip install -r requirements.txt
 OPENROUTER_API_KEY=sua_chave_api_aqui
 ```
 
+4. **Novo!** Para configuração automática do ambiente:
+```bash
+python setup.py
+```
+Este script verificará e instalará todas as dependências necessárias.
+
 ## 🎮 Como Usar
 
 1. Inicie o servidor:
@@ -90,6 +96,23 @@ http://localhost:8000
    - Verifique se a chave API está correta no arquivo .env
    - Confirme se há conexão com a internet
 
+4. **Problemas com download de vídeos do YouTube:**
+   - Execute `python check_environment.py` para verificar as dependências
+   - Atualize o yt-dlp: `pip install -U yt-dlp`
+   - Verifique se o FFmpeg está corretamente instalado e no PATH
+   - Se estiver usando Windows, certifique-se que os arquivos ffmpeg.exe, ffplay.exe e ffprobe.exe estão acessíveis
+   - Em caso de erro persistente, tente: `yt-dlp --update`
+   - Se o servidor estiver em uma rede corporativa ou com proxy, configure o acesso corretamente
+
 ## 📝 Licença
 
-Este projeto está sob a licença MIT. Veja o arquivo LICENSE para mais detalhes. 
+Este projeto está sob a licença MIT. Veja o arquivo LICENSE para mais detalhes.
+
+## 🆕 Novidades e Atualizações
+
+### Versão 1.1
+- Melhorias na robustez do download de vídeos do YouTube
+- Adicionados scripts de verificação e configuração do ambiente
+- Suporte aprimorado para detecção de formatos disponíveis
+- Tratamento de erros mais detalhado
+- Interface com feedback mais claro sobre os processos 

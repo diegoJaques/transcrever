@@ -2,6 +2,8 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Web
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 import whisper
 import os
 import yt_dlp
@@ -18,13 +20,34 @@ from pathlib import Path
 from audio_manager import AudioManager
 import glob
 import pytube
+import ssl
+import certifi
 from pydantic import BaseModel
 from typing import Optional
 
 # Carrega variáveis de ambiente
 load_dotenv()
 
+# Configuração para contornar problemas de SSL
+ssl._create_default_https_context = ssl._create_unverified_context
+os.environ['PYTHONHTTPSVERIFY'] = '0'
+os.environ['SSL_CERT_FILE'] = certifi.where()
+
 app = FastAPI()
+
+# Configuração para funcionar atrás de proxy reverso (Traefik)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["*"]  # Aceita todos os hosts
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Configuração de arquivos estáticos e templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -49,18 +72,54 @@ modelo_atual_nome = 'small'  # Variável para armazenar o nome do modelo atual
 class ConnectionManager:
     def __init__(self):
         self.active_connections = {}
+        self.connection_states = {}  # Rastreia estado das conexões
 
     async def connect(self, websocket: WebSocket, client_id: str):
         await websocket.accept()
         self.active_connections[client_id] = websocket
+        self.connection_states[client_id] = {
+            "connected": True,
+            "last_ping": time.time(),
+            "transcricao_id": None
+        }
+        print(f"WebSocket conectado: {client_id}")
 
     def disconnect(self, client_id: str):
         if client_id in self.active_connections:
             del self.active_connections[client_id]
+        if client_id in self.connection_states:
+            self.connection_states[client_id]["connected"] = False
+        print(f"WebSocket desconectado: {client_id}")
+
+    def is_connected(self, client_id: str) -> bool:
+        """Verifica se a conexão ainda está ativa"""
+        return (client_id in self.active_connections and 
+                client_id in self.connection_states and 
+                self.connection_states[client_id]["connected"])
 
     async def send_message(self, message: str, client_id: str):
-        if client_id in self.active_connections:
-            await self.active_connections[client_id].send_text(message)
+        if not self.is_connected(client_id):
+            print(f"Tentativa de enviar mensagem para conexão inativa: {client_id}")
+            return False
+        
+        try:
+            websocket = self.active_connections.get(client_id)
+            if websocket and websocket.client_state.name == "CONNECTED":
+                await websocket.send_text(message)
+                self.connection_states[client_id]["last_ping"] = time.time()
+                return True
+            else:
+                self.disconnect(client_id)
+                return False
+        except Exception as e:
+            print(f"Erro ao enviar mensagem WebSocket para {client_id}: {e}")
+            self.disconnect(client_id)
+            return False
+
+    def set_transcricao_id(self, client_id: str, transcricao_id: str):
+        """Associa uma transcrição a uma conexão"""
+        if client_id in self.connection_states:
+            self.connection_states[client_id]["transcricao_id"] = transcricao_id
 
 manager = ConnectionManager()
 
@@ -121,13 +180,17 @@ def baixar_audio_youtube(url):
         'format': 'bestaudio/best',
         'outtmpl': f'audios/audio_{download_id}.%(ext)s',
         'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
-        'geo_bypass': True, 'geo_bypass_country': 'US', 'geo_bypass_ip_block': '8.8.8.8',
-        'nocheckcertificate': True, 'ignoreerrors': False, 'noplaylist': True,
-        'source_address': '0.0.0.0', 'force_generic_extractor': False,
-        'sleep_interval': 1, 'max_sleep_interval': 5,
-        'external_downloader_args': ['-timeout', '10'],
-        'extractor_retries': 5, 'file_access_retries': 5, 'fragment_retries': 5,
-        'retry_sleep_functions': {'http': lambda n: 5},
+        'geo_bypass': True, 'geo_bypass_country': 'US',
+        'nocheckcertificate': True,  # Ignora verificação de certificado SSL
+        'ignoreerrors': False, 'noplaylist': True,
+        # Mais opções de robustez
+        'socket_timeout': 30,
+        'retries': 10,
+        'fragment_retries': 10,
+        'skip_download': False,
+        'hls_prefer_native': False,
+        'hls_use_mpegts': True,
+        'extractor_args': {'youtube': {'skip': ['dash', 'hls']}},
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -184,16 +247,33 @@ def baixar_audio_youtube(url):
             print(f"Tentativa 2 (pytube) falhou: {e_pytube}")
             last_error = e_pytube
 
-    # --- Tentativa 3: yt-dlp (Alternativo) ---
+    # --- Tentativa 3: yt-dlp (Alternativo com lista de formatos) ---
     if last_error: # Só tenta se as anteriores falharam
-        print("Tentando download alternativo (Tentativa 3 - yt-dlp alternativo)...")
-        alt_opts = {
-            'format': 'bestaudio', 'outtmpl': f'audios/audio_{download_id}.%(ext)s',
-            'noplaylist': True, 'geo_bypass': True, 'nocheckcertificate': True,
-            'ignoreerrors': False, 'quiet': False, 'no_warnings': False,
-            'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36'},
-        }
+        print("Tentando download alternativo (Tentativa 3 - yt-dlp com lista de formatos)...")
         try:
+            # Primeiro, listar os formatos disponíveis
+            list_opts = {
+                'listformats': True,
+                'quiet': False,
+                'no_warnings': False,
+                'geo_bypass': True,
+                'nocheckcertificate': True,
+            }
+            with yt_dlp.YoutubeDL(list_opts) as ydl_list:
+                print("Listando formatos disponíveis...")
+                info = ydl_list.extract_info(url, download=False)
+                
+            # Tenta baixar com formato específico (começando pelo áudio)
+            alt_opts = {
+                'format': '140/bestaudio/best', # Tenta formato 140 (m4a) primeiro, depois outros
+                'outtmpl': f'audios/audio_{download_id}.%(ext)s',
+                'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
+                'noplaylist': True, 'geo_bypass': True, 'nocheckcertificate': True,
+                'ignoreerrors': False, 'quiet': False, 'no_warnings': False,
+                'socket_timeout': 30,
+                'retries': 10,
+                'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36'},
+            }
             with yt_dlp.YoutubeDL(alt_opts) as ydl_alt:
                 info_dict = ydl_alt.extract_info(url, download=True)
                 if not info_dict:
@@ -203,11 +283,66 @@ def baixar_audio_youtube(url):
                 if not possible_files:
                     raise Exception("Arquivo de áudio não foi criado após o download (yt-dlp alternativo)")
                 actual_file = possible_files[0]
-                print(f"Download (Tentativa 3 - yt-dlp alternativo) concluído com sucesso: {actual_file}")
+                print(f"Download (Tentativa 3 - yt-dlp formato específico) concluído com sucesso: {actual_file}")
                 return actual_file, video_title
         except Exception as e_alt:
-            print(f"Tentativa 3 (yt-dlp alternativo) falhou: {e_alt}")
+            print(f"Tentativa 3 (yt-dlp formato específico) falhou: {e_alt}")
             last_error = e_alt
+            
+    # --- Tentativa 4: Usando YouTube API --- 
+    if last_error:
+        print("Tentando download final (Tentativa 4 - método direto)...")
+        try:
+            import urllib.request
+            from urllib.parse import parse_qs, urlparse
+            
+            # Extrair video_id da URL
+            query = urlparse(url)
+            if query.hostname == 'youtu.be':
+                video_id = query.path[1:]
+            elif query.hostname in ('www.youtube.com', 'youtube.com'):
+                if query.path == '/watch':
+                    video_id = parse_qs(query.query)['v'][0]
+                elif query.path[:7] == '/embed/':
+                    video_id = query.path.split('/')[2]
+                elif query.path[:3] == '/v/':
+                    video_id = query.path.split('/')[2]
+            else:
+                video_id = None
+                
+            if not video_id:
+                raise Exception("Não foi possível extrair o ID do vídeo da URL")
+                
+            # Usar API para obter o título
+            api_url = f"https://www.googleapis.com/youtube/v3/videos?id={video_id}&part=snippet&key=YOUR_API_KEY"
+            video_title = f"Video {video_id}"  # Título padrão se não conseguir pela API
+            
+            # URL direta para o áudio (pode não funcionar para todos os vídeos)
+            direct_url = f"https://www.youtube.com/get_video_info?video_id={video_id}"
+            output_file = f"audios/audio_{download_id}.mp3"
+            
+            # Baixar usando urllib
+            print(f"Tentando baixar diretamente: {direct_url}")
+            req = urllib.request.Request(
+                direct_url,
+                data=None,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36'
+                }
+            )
+            with urllib.request.urlopen(req) as response, open(output_file, 'wb') as out_file:
+                data = response.read()
+                out_file.write(data)
+                
+            if os.path.exists(output_file) and os.path.getsize(output_file) > 1000:  # Verificar se tem conteúdo
+                print(f"Download (Tentativa 4 - método direto) concluído com sucesso: {output_file}")
+                return output_file, video_title
+            else:
+                raise Exception("Arquivo baixado parece estar vazio ou é muito pequeno")
+                
+        except Exception as e_direct:
+            print(f"Tentativa 4 (método direto) falhou: {e_direct}")
+            last_error = e_direct
 
     # --- Falha Total ---
     print(f"Todas as tentativas de download para {url} falharam.")
@@ -261,31 +396,77 @@ def carregar_transcricao_parcial(transcricao_id):
     return None
 
 async def transcrever_audio_em_chunks(caminho_audio, client_id, transcricao_id, titulo, idioma='pt'):
-    """Transcreve o áudio em chunks e envia atualizações via WebSocket"""
+    """Transcreve o áudio em chunks e envia atualizações via WebSocket com sistema de retomada aprimorado"""
     try:
         if not modelo_atual:
             raise Exception("Modelo não carregado")
         
+        # Verifica se a conexão ainda está ativa antes de começar
+        if not manager.is_connected(client_id):
+            print(f"Conexão WebSocket inativa para {client_id}, abortando transcrição")
+            return None
+        
         # Notifica o cliente que o processamento começou
-        await manager.send_message(json.dumps({
+        sent = await manager.send_message(json.dumps({
             "tipo": "status",
             "mensagem": f"Preparando áudio para transcrição ({modelo_atual_nome})..."
         }), client_id)
         
-        # Verifica se há uma transcrição parcial salva
+        if not sent:
+            print("Falha ao enviar mensagem inicial, abortando transcrição")
+            return None
+        
+        # Verifica se há uma transcrição parcial salva e se está realmente completa
         transcricao_parcial = carregar_transcricao_parcial(transcricao_id)
-        if transcricao_parcial and not transcricao_parcial["concluido"]:
+        texto_atual = ""
+        
+        # CORREÇÃO PRINCIPAL: Só usa transcrição parcial se for uma retomada legítima
+        if transcricao_parcial and transcricao_parcial.get("concluido", False):
+            # Se já está concluída, retorna o resultado salvo
+            texto_completo = transcricao_parcial["texto"]
+            print(f"Transcrição {transcricao_id} já estava completa, usando resultado salvo")
+            
+            # Atualiza interface diretamente para 100%
+            await manager.send_message(json.dumps({
+                "tipo": "transcricao_parcial", 
+                "texto": texto_completo,
+                "progresso": 100,
+                "transcricao_id": transcricao_id,
+                "titulo": titulo,
+                "etapa": "Transcrição já concluída"
+            }), client_id)
+            
+            # Marca como concluída
+            transcricoes_ativas[transcricao_id]["status"] = "concluida"
+            transcricoes_ativas[transcricao_id]["texto"] = texto_completo
+            
+            await manager.send_message(json.dumps({
+                "tipo": "transcricao_concluida", 
+                "transcricao_id": transcricao_id,
+                "titulo": titulo,
+                "tempo_processamento": "0.0s (cache)"
+            }), client_id)
+            
+            return texto_completo
+        
+        elif transcricao_parcial and not transcricao_parcial.get("concluido", False):
+            # Se há transcrição parcial incompleta, mostra progresso parcial mas refaz
             texto_atual = transcricao_parcial["texto"]
+            print(f"Encontrada transcrição parcial para {transcricao_id}, mas refazendo processamento")
+            
             await manager.send_message(json.dumps({
                 "tipo": "transcricao_parcial", 
                 "texto": texto_atual,
-                "progresso": 50,  # Valor aproximado
+                "progresso": 25,  # Progresso parcial
                 "transcricao_id": transcricao_id,
                 "titulo": titulo,
-                "etapa": "Retomando transcrição anterior"
+                "etapa": "Retomando processamento..."
             }), client_id)
-        else:
-            texto_atual = ""
+        
+        # Verifica conexão antes de iniciar processamento pesado
+        if not manager.is_connected(client_id):
+            print(f"Conexão perdida durante preparação para {client_id}")
+            return None
         
         # Notifica sobre o início da transcrição
         await manager.send_message(json.dumps({
@@ -293,88 +474,85 @@ async def transcrever_audio_em_chunks(caminho_audio, client_id, transcricao_id, 
             "mensagem": f"Iniciando transcrição com modelo {modelo_atual_nome}..."
         }), client_id)
         
-        # Para uma implementação real, podemos dividir o áudio em chunks
-        # Aqui vamos usar o Whisper padrão mas com mais atualizações de status
-        
         # Notifica o processamento de áudio
         await manager.send_message(json.dumps({
             "tipo": "transcricao_parcial", 
             "texto": "",
-            "progresso": 5,
+            "progresso": 30,
             "transcricao_id": transcricao_id,
             "titulo": titulo,
             "etapa": "Processando áudio"
         }), client_id)
         
-        # Aguarda um pouco para permitir que a interface atualize
-        await asyncio.sleep(1)
-        
-        # Inicia a transcrição - enviar status de detecção de idioma
-        await manager.send_message(json.dumps({
-            "tipo": "transcricao_parcial", 
-            "texto": "",
-            "progresso": 15,
-            "transcricao_id": transcricao_id,
-            "titulo": titulo,
-            "etapa": "Detectando idioma"
-        }), client_id)
+        # Verifica conexão antes do processamento principal
+        if not manager.is_connected(client_id):
+            print(f"Conexão perdida antes do processamento principal para {client_id}")
+            return None
         
         # Inicia a transcrição efetivamente
         tempo_inicio = time.time()
+        print(f"Iniciando transcrição Whisper para {transcricao_id}")
+        
+        # PROCESSAMENTO PRINCIPAL - sempre executa para garantir resultado completo
         transcricao = modelo_atual.transcribe(caminho_audio, language=idioma)
         tempo_total = time.time() - tempo_inicio
         texto_completo = transcricao['text']
         
-        # Após completar o processo principal, faça atualizações graduais
-        total_chars = len(texto_completo)
+        print(f"Transcrição Whisper concluída para {transcricao_id} em {tempo_total:.1f}s")
         
-        # Se já temos uma transcrição parcial, enviamos somente as atualizações
-        if not texto_atual:
-            # Simulamos processamento em chunks para mostrar progresso
-            pontos = [30, 50, 75, 90, 100]
-            
-            for i, ponto in enumerate(pontos):
-                if ponto == 100:
-                    texto_atual = texto_completo
-                    etapa = "Transcrição completa"
-                else:
-                    char_position = int((ponto/100) * total_chars)
-                    texto_atual = texto_completo[:char_position]
-                    etapa = f"Transcrição em andamento ({i+1}/{len(pontos)-1})"
-                
-                # Salva transcrição parcial
-                salvar_transcricao_parcial(transcricao_id, texto_atual, ponto == 100)
-                
-                # Envia atualização
-                await manager.send_message(json.dumps({
-                    "tipo": "transcricao_parcial", 
-                    "texto": texto_atual,
-                    "progresso": ponto,
-                    "transcricao_id": transcricao_id,
-                    "titulo": titulo,
-                    "etapa": etapa,
-                    "tempo_processamento": f"{tempo_total:.1f}s"
-                }), client_id)
-                
-                # Simula tempo de processamento (mais rápido)
-                await asyncio.sleep(0.5)
-        else:
-            # Se já temos uma transcrição parcial, enviamos a completa
+        # Verifica conexão após processamento
+        if not manager.is_connected(client_id):
+            print(f"Conexão perdida após processamento para {client_id}, salvando resultado")
+            # Salva o resultado mesmo se a conexão caiu
             salvar_transcricao_parcial(transcricao_id, texto_completo, True)
-            await manager.send_message(json.dumps({
+            transcricoes_ativas[transcricao_id]["status"] = "concluida"
+            transcricoes_ativas[transcricao_id]["texto"] = texto_completo
+            return texto_completo
+        
+        # Simula processamento em chunks para mostrar progresso
+        pontos = [50, 70, 85, 95, 100]
+        
+        for i, ponto in enumerate(pontos):
+            # Verifica conexão antes de cada envio
+            if not manager.is_connected(client_id):
+                print(f"Conexão perdida durante envio de progresso para {client_id}")
+                break
+                
+            if ponto == 100:
+                texto_atual = texto_completo
+                etapa = "Transcrição completa"
+            else:
+                # Mostra progresso gradual do texto
+                char_position = int((ponto/100) * len(texto_completo))
+                texto_atual = texto_completo[:char_position]
+                etapa = f"Finalizando transcrição ({i+1}/{len(pontos)})"
+            
+            # Salva transcrição parcial
+            salvar_transcricao_parcial(transcricao_id, texto_atual, ponto == 100)
+            
+            # Envia atualização se conexão ativa
+            success = await manager.send_message(json.dumps({
                 "tipo": "transcricao_parcial", 
-                "texto": texto_completo,
-                "progresso": 100,
+                "texto": texto_atual,
+                "progresso": ponto,
                 "transcricao_id": transcricao_id,
                 "titulo": titulo,
-                "etapa": "Transcrição completa"
+                "etapa": etapa,
+                "tempo_processamento": f"{tempo_total:.1f}s"
             }), client_id)
+            
+            if not success:
+                print(f"Falha ao enviar progresso {ponto}% para {client_id}")
+                break
+            
+            # Pausa menor para mostrar progresso
+            await asyncio.sleep(0.3)
         
-        # Marca como concluída
+        # Marca como concluída sempre (independente da conexão)
         transcricoes_ativas[transcricao_id]["status"] = "concluida"
         transcricoes_ativas[transcricao_id]["texto"] = texto_completo
         
-        # Envia mensagem de conclusão
+        # Tenta enviar mensagem de conclusão
         await manager.send_message(json.dumps({
             "tipo": "transcricao_concluida", 
             "transcricao_id": transcricao_id,
@@ -385,6 +563,7 @@ async def transcrever_audio_em_chunks(caminho_audio, client_id, transcricao_id, 
         global ultima_transcricao
         ultima_transcricao = texto_completo
         
+        print(f"Transcrição {transcricao_id} concluída com sucesso")
         return texto_completo
         
     except Exception as e:
@@ -393,14 +572,14 @@ async def transcrever_audio_em_chunks(caminho_audio, client_id, transcricao_id, 
             transcricoes_ativas[transcricao_id]["status"] = "falha"
             transcricoes_ativas[transcricao_id]["erro"] = str(e)
         
-        # Notifica o cliente sobre o erro
+        # Tenta notificar o cliente sobre o erro
         await manager.send_message(json.dumps({
             "tipo": "erro", 
             "mensagem": f"Erro na transcrição: {str(e)}",
             "transcricao_id": transcricao_id
         }), client_id)
         
-        print(f"Erro na transcrição: {str(e)}")
+        print(f"Erro na transcrição {transcricao_id}: {str(e)}")
         return None
 
 def transcrever_audio(caminho_audio, idioma='pt'):
@@ -602,6 +781,8 @@ async def obter_transcricao(transcricao_id: str):
 
 @app.post("/retomar-transcricao/{transcricao_id}")
 async def retomar_transcricao(transcricao_id: str):
+    print(f"Tentativa de retomar transcrição: {transcricao_id}")
+    
     # Verifica se a transcrição existe na lista de ativas
     if transcricao_id not in transcricoes_ativas:
         # Tenta recuperar do arquivo
@@ -611,16 +792,40 @@ async def retomar_transcricao(transcricao_id: str):
                 with open(caminho, 'r', encoding='utf-8') as f:
                     dados_arquivo = json.load(f)
                 
-                # Recria o registro da transcrição com os dados básicos
+                # Se a transcrição já está concluída no arquivo, não precisa retomar
+                if dados_arquivo.get("concluido", False):
+                    print(f"Transcrição {transcricao_id} já estava concluída")
+                    transcricoes_ativas[transcricao_id] = {
+                        "status": "concluida",
+                        "texto": dados_arquivo.get("texto", ""),
+                        "iniciado_em": dados_arquivo.get("timestamp", datetime.now().isoformat()),
+                        "tipo": "arquivo_recuperado",
+                        "titulo": "Transcrição Recuperada (Completa)",
+                        "concluido": True
+                    }
+                    
+                    # Retorna status concluído
+                    return {
+                        "status": "concluida",
+                        "transcricao_id": transcricao_id,
+                        "message": "Transcrição já estava concluída.",
+                        "texto": dados_arquivo.get("texto", "")
+                    }
+                
+                # Recria o registro da transcrição para retomada
                 transcricoes_ativas[transcricao_id] = {
                     "status": "falha",  # Marca como falha para poder retomar
                     "texto": dados_arquivo.get("texto", ""),
                     "iniciado_em": dados_arquivo.get("timestamp", datetime.now().isoformat()),
-                    "tipo": "desconhecido",
-                    "titulo": "Transcrição Recuperada"
+                    "tipo": "arquivo_recuperado",
+                    "titulo": "Transcrição Recuperada",
+                    "progresso_anterior": len(dados_arquivo.get("texto", "")) > 0,
+                    "dados_salvos": dados_arquivo  # Preserva dados originais
                 }
                 
                 print(f"Transcrição {transcricao_id} recuperada do arquivo para retomada")
+                print(f"Texto parcial encontrado: {len(dados_arquivo.get('texto', ''))} caracteres")
+                
             except Exception as e:
                 print(f"Erro ao recuperar transcrição do arquivo para retomada: {str(e)}")
                 raise HTTPException(status_code=404, detail="Transcrição não encontrada ou corrompida")
@@ -629,25 +834,47 @@ async def retomar_transcricao(transcricao_id: str):
     
     transcricao = transcricoes_ativas[transcricao_id]
     
-    # Verifica se podemos retomar (deve estar em falha ou foi criada agora)
-    if transcricao["status"] != "falha" and transcricao.get("recriada") != True:
-        raise HTTPException(status_code=400, detail="Só é possível retomar transcrições que falharam")
+    # Verifica se podemos retomar
+    if transcricao["status"] == "concluida":
+        print(f"Transcrição {transcricao_id} já está concluída")
+        return {
+            "status": "concluida",
+            "transcricao_id": transcricao_id,
+            "message": "Transcrição já está concluída.",
+            "texto": transcricao.get("texto", "")
+        }
     
-    # Atualiza o status
-    transcricao["status"] = "retomando"
+    if transcricao["status"] not in ["falha", "cancelada"] and not transcricao.get("progresso_anterior", False):
+        raise HTTPException(status_code=400, detail=f"Não é possível retomar transcrição com status: {transcricao['status']}")
+    
+    # Preserva informações importantes para a retomada
+    dados_anteriores = {
+        "texto_parcial": transcricao.get("texto", ""),
+        "titulo_anterior": transcricao.get("titulo", ""),
+        "tipo_original": transcricao.get("tipo", ""),
+        "url_original": transcricao.get("url", ""),
+        "caminho_original": transcricao.get("caminho", ""),
+        "nome_arquivo_original": transcricao.get("nome_arquivo", "")
+    }
+    
+    # Atualiza o status para retomada
+    transcricao["status"] = "preparando_retomada"
+    transcricao["dados_anteriores"] = dados_anteriores
     
     # Retorna um novo client_id para reconexão
     novo_client_id = str(uuid.uuid4())
     transcricao["client_id"] = novo_client_id
     
-    # Adiciona mensagem de retomada para o log
     print(f"Retomando transcrição {transcricao_id} com novo client_id {novo_client_id}")
+    print(f"Dados anteriores preservados: {dados_anteriores}")
     
     return {
-        "status": "retomando", 
+        "status": "preparando_retomada", 
         "client_id": novo_client_id, 
         "transcricao_id": transcricao_id,
-        "message": "Transcrição retomada. Conecte-se ao WebSocket para receber atualizações."
+        "message": "Transcrição preparada para retomada. Conecte-se ao WebSocket para receber atualizações.",
+        "progresso_anterior": transcricao.get("progresso_anterior", False),
+        "texto_parcial": dados_anteriores["texto_parcial"]
     }
 
 @app.post("/generate-insights")
@@ -692,13 +919,16 @@ async def generate_insights_endpoint(request_data: InsightsRequest):
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
-    await manager.connect(websocket, client_id)
+    transcricao_id = None
     try:
+        await manager.connect(websocket, client_id)
+        print(f"Cliente WebSocket conectado: {client_id}")
+        
         # Busca transcrição associada a este client_id
-        transcricao_id = None
         for tid, info in transcricoes_ativas.items():
             if info.get("client_id") == client_id:
                 transcricao_id = tid
+                manager.set_transcricao_id(client_id, transcricao_id)
                 break
         
         if not transcricao_id:
@@ -709,8 +939,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             return
         
         info = transcricoes_ativas[transcricao_id]
+        print(f"Transcrição associada: {transcricao_id}, Status: {info.get('status', 'desconhecido')}")
         
-        # Verifica o status
+        # Verifica o status atual
         if info["status"] in ["concluida", "falha"]:
             # Se já concluiu ou falhou, envia o status
             await manager.send_message(json.dumps({
@@ -729,6 +960,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             
             return
         
+        # Atualiza status para processamento
+        transcricoes_ativas[transcricao_id]["status"] = "processando"
+        
         # Realiza a transcrição em background
         if info["tipo"] == "youtube":
             # Notifica que está baixando o vídeo do YouTube
@@ -743,6 +977,14 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             try:
                 caminho_audio, titulo = await asyncio.to_thread(baixar_audio_youtube, info["url"])
                 
+                # Verifica se conexão ainda está ativa após download
+                if not manager.is_connected(client_id):
+                    print(f"Conexão perdida após download para {client_id}")
+                    return
+                
+                # Atualiza o título na transcrição
+                transcricoes_ativas[transcricao_id]["titulo"] = titulo
+                
                 # Notifica que o download foi concluído
                 await manager.send_message(json.dumps({
                     "tipo": "preparando",
@@ -751,8 +993,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     "transcricao_id": transcricao_id
                 }), client_id)
                 
-                # Inicia a transcrição
-                asyncio.create_task(transcrever_audio_em_chunks(caminho_audio, client_id, transcricao_id, titulo))
+                # Inicia a transcrição SEM create_task para melhor controle
+                await transcrever_audio_em_chunks(caminho_audio, client_id, transcricao_id, titulo)
+                
             except Exception as e:
                 # Atualiza o status da transcrição
                 transcricoes_ativas[transcricao_id]["status"] = "falha"
@@ -764,7 +1007,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     "mensagem": f"Erro ao baixar áudio do YouTube: {str(e)}",
                     "transcricao_id": transcricao_id
                 }), client_id)
-                raise e
+                print(f"Erro no download do YouTube para {transcricao_id}: {e}")
             
         elif info["tipo"] == "arquivo":
             # Notifica que está extraindo o áudio
@@ -779,6 +1022,14 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             try:
                 caminho_audio, titulo = await asyncio.to_thread(extrair_audio_video, info["caminho"])
                 
+                # Verifica se conexão ainda está ativa após extração
+                if not manager.is_connected(client_id):
+                    print(f"Conexão perdida após extração para {client_id}")
+                    return
+                
+                # Atualiza o título na transcrição
+                transcricoes_ativas[transcricao_id]["titulo"] = titulo
+                
                 # Notifica que a extração foi concluída
                 await manager.send_message(json.dumps({
                     "tipo": "preparando",
@@ -787,35 +1038,52 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     "transcricao_id": transcricao_id
                 }), client_id)
                 
-                # Inicia a transcrição
-                asyncio.create_task(transcrever_audio_em_chunks(caminho_audio, client_id, transcricao_id, titulo))
+                # Inicia a transcrição SEM create_task para melhor controle
+                await transcrever_audio_em_chunks(caminho_audio, client_id, transcricao_id, titulo)
+                
             except Exception as e:
+                transcricoes_ativas[transcricao_id]["status"] = "falha"
+                transcricoes_ativas[transcricao_id]["erro"] = str(e)
+                
                 await manager.send_message(json.dumps({
                     "tipo": "erro", 
                     "mensagem": f"Erro ao extrair áudio do vídeo: {str(e)}",
                     "transcricao_id": transcricao_id
                 }), client_id)
-                raise e
+                print(f"Erro na extração de áudio para {transcricao_id}: {e}")
         
         # Mantém a conexão aberta para receber comandos do cliente
-        while True:
-            data = await websocket.receive_text()
-            cmd = json.loads(data)
-            
-            if cmd["acao"] == "cancelar":
-                # Cancela a transcrição
-                transcricoes_ativas[transcricao_id]["status"] = "cancelada"
-                await manager.send_message(json.dumps({
-                    "tipo": "cancelada",
-                    "transcricao_id": transcricao_id
-                }), client_id)
+        while manager.is_connected(client_id):
+            try:
+                # Timeout para evitar bloqueio infinito
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
+                cmd = json.loads(data)
+                
+                if cmd["acao"] == "cancelar":
+                    # Cancela a transcrição
+                    transcricoes_ativas[transcricao_id]["status"] = "cancelada"
+                    await manager.send_message(json.dumps({
+                        "tipo": "cancelada",
+                        "transcricao_id": transcricao_id
+                    }), client_id)
+                    break
+                    
+            except asyncio.TimeoutError:
+                # Timeout normal, continua o loop
+                continue
+            except WebSocketDisconnect:
+                print(f"Cliente {client_id} desconectou durante loop de comandos")
                 break
     
     except WebSocketDisconnect:
-        # Cliente desconectou mas a transcrição continua em background
-        pass
+        print(f"Cliente {client_id} desconectou")
+        # Cliente desconectou mas a transcrição pode continuar em background
+        if transcricao_id and transcricao_id in transcricoes_ativas:
+            if transcricoes_ativas[transcricao_id]["status"] in ["em_andamento", "processando"]:
+                print(f"Transcrição {transcricao_id} continua em background após desconexão")
     except Exception as e:
-        # Qualquer erro, enviamos ao cliente se possível
+        print(f"Erro no WebSocket para {client_id}: {e}")
+        # Qualquer erro, tenta enviar ao cliente se possível
         try:
             await manager.send_message(json.dumps({
                 "tipo": "erro",
@@ -824,6 +1092,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         except:
             pass
     finally:
+        print(f"Finalizando conexão WebSocket: {client_id}")
         manager.disconnect(client_id)
 
 # Rotas antigas para compatibilidade

@@ -325,7 +325,7 @@ document.addEventListener('DOMContentLoaded', function() {
             try {
                 const data = JSON.parse(event.data);
                 console.log("Mensagem recebida:", data);
-                adicionarStatusHistorico(`Mensagem: ${data.tipo} - ${data.mensagem || data.etapa || ''}`, 'debug'); // Log mais detalhado
+                adicionarStatusHistorico(`Mensagem: ${data.tipo} - ${data.mensagem || data.etapa || ''}`, 'debug');
 
                 switch (data.tipo) {
                     case 'status':
@@ -343,61 +343,92 @@ document.addEventListener('DOMContentLoaded', function() {
                         transcricaoTexto.textContent = data.texto;
                         transcricaoTitulo.textContent = data.titulo || 'Transcrição em Andamento';
                         statusText.textContent = data.etapa || `Progresso: ${data.progresso}%`;
-                        transcricaoId = data.transcricao_id; // Garante que temos o ID
-                        // Atualiza dados locais
+                        transcricaoId = data.transcricao_id;
+                        
+                        // Atualiza dados locais com validação melhorada
                         if (!transcricoesAtivas[data.transcricao_id]) {
-                             transcricoesAtivas[data.transcricao_id] = { iniciado_em: new Date().toISOString() };
+                             transcricoesAtivas[data.transcricao_id] = { 
+                                 iniciado_em: new Date().toISOString(),
+                                 client_id: clientId
+                             };
                         }
-                        transcricoesAtivas[data.transcricao_id].status = 'em_andamento';
+                        
+                        // Atualiza status baseado no progresso
+                        if (data.progresso >= 100) {
+                            transcricoesAtivas[data.transcricao_id].status = 'concluida';
+                        } else {
+                            transcricoesAtivas[data.transcricao_id].status = 'em_andamento';
+                        }
+                        
                         transcricoesAtivas[data.transcricao_id].titulo = data.titulo;
-                        transcricoesAtivas[data.transcricao_id].texto = data.texto; // Salva parcial
+                        transcricoesAtivas[data.transcricao_id].texto = data.texto;
+                        transcricoesAtivas[data.transcricao_id].progresso = data.progresso;
+                        transcricoesAtivas[data.transcricao_id].etapa = data.etapa;
+                        
                         salvarTranscricoesLocais();
                         break;
+                        
                     case 'transcricao_concluida':
-                        toggleProgress(false); // Esconde barra de progresso
+                        toggleProgress(false);
                         transcricaoEmAndamento = false;
                         statusText.textContent = 'Transcrição concluída!';
                         adicionarStatusHistorico("Transcrição concluída com sucesso!", "success");
                         btnCancelar.classList.add('d-none');
                         btnBaixar.classList.remove('d-none');
-                        gerarInsightsBtn.disabled = false; // Habilita botão original de insights
-                        btnFalar.classList.remove('d-none'); // Habilita botão de falar
-                        transcricaoId = data.transcricao_id; // Garante que temos o ID final
-                        // Atualiza dados locais
+                        gerarInsightsBtn.disabled = false;
+                        btnFalar.classList.remove('d-none');
+                        transcricaoId = data.transcricao_id;
+                        
+                        // Atualiza status final
                         if (transcricoesAtivas[data.transcricao_id]) {
                             transcricoesAtivas[data.transcricao_id].status = 'concluida';
-                            // O texto já deve ter sido atualizado na última mensagem parcial
+                            transcricoesAtivas[data.transcricao_id].progresso = 100;
+                            transcricoesAtivas[data.transcricao_id].concluida_em = new Date().toISOString();
                             salvarTranscricoesLocais();
                         }
-                        showAskAiSection(); // Mostra a seção para perguntas à IA
+                        
+                        showAskAiSection();
                         break;
+                        
                     case 'erro':
                         toggleProgress(false);
                         transcricaoEmAndamento = false;
                         statusText.textContent = `Erro: ${data.mensagem}`;
                         adicionarStatusHistorico(`Erro na transcrição: ${data.mensagem}`, 'error');
-                        alert(`Erro na transcrição: ${data.mensagem}`);
+                        
+                        // Não mostra alert para não ser intrusivo
+                        console.error("Erro na transcrição:", data.mensagem);
+                        
                         btnCancelar.classList.add('d-none');
-                        hideAskAiSection(); // Oculta seção AI em caso de erro
-                        // Atualiza dados locais
-                         if (data.transcricao_id && transcricoesAtivas[data.transcricao_id]) {
+                        hideAskAiSection();
+                        
+                        // Atualiza status local com mais informações
+                        if (data.transcricao_id && transcricoesAtivas[data.transcricao_id]) {
                             transcricoesAtivas[data.transcricao_id].status = 'falha';
+                            transcricoesAtivas[data.transcricao_id].erro = data.mensagem;
+                            transcricoesAtivas[data.transcricao_id].erro_em = new Date().toISOString();
                             salvarTranscricoesLocais();
                         }
+                        
+                        // Mostra botão de retomar se aplicável
+                        btnRetomar.classList.remove('d-none');
                         break;
+                        
                     case 'cancelada':
                          toggleProgress(false);
                          transcricaoEmAndamento = false;
                          statusText.textContent = 'Transcrição cancelada pelo usuário.';
                          adicionarStatusHistorico('Transcrição cancelada.', 'warning');
                          btnCancelar.classList.add('d-none');
-                         hideAskAiSection(); // Oculta seção AI se cancelado
-                         // Atualiza dados locais
+                         hideAskAiSection();
+                         
                          if (data.transcricao_id && transcricoesAtivas[data.transcricao_id]) {
                             transcricoesAtivas[data.transcricao_id].status = 'cancelada';
+                            transcricoesAtivas[data.transcricao_id].cancelada_em = new Date().toISOString();
                             salvarTranscricoesLocais();
                         }
                          break;
+                         
                     default:
                         console.warn("Tipo de mensagem desconhecido:", data.tipo);
                         adicionarStatusHistorico(`Mensagem desconhecida: ${event.data}`, 'warning');
@@ -411,14 +442,18 @@ document.addEventListener('DOMContentLoaded', function() {
         ws.onerror = function(error) {
             console.error("Erro no WebSocket:", error);
             transcricaoEmAndamento = false;
-            // Não mostra alerta aqui para não ser chato, mas loga
             adicionarStatusHistorico("Erro na conexão WebSocket.", "error");
-            // Poderia tentar reconectar ou atualizar status da transcrição para falha
-            if (transcricaoId && transcricoesAtivas[transcricaoId] && transcricoesAtivas[transcricaoId].status === 'em_andamento') {
+            
+            // Marca como falha apenas se estava realmente em andamento
+            if (transcricaoId && transcricoesAtivas[transcricaoId] && 
+                transcricoesAtivas[transcricaoId].status === 'em_andamento') {
                  transcricoesAtivas[transcricaoId].status = 'falha';
+                 transcricoesAtivas[transcricaoId].erro = "Erro de conexão WebSocket";
+                 transcricoesAtivas[transcricaoId].erro_em = new Date().toISOString();
                  salvarTranscricoesLocais();
-                 // Atualiza a interface para refletir a falha
-                 carregarTranscricao(transcricaoId);
+                 
+                 // Mostra botão de retomar
+                 btnRetomar.classList.remove('d-none');
             }
         };
 
@@ -426,13 +461,27 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log("WebSocket desconectado:", event.code, event.reason);
             transcricaoEmAndamento = false;
             ws = null;
-            // Se não foi cancelamento explícito e estava em andamento, loga
-            if (event.code !== 1000 && event.code !== 1005 && (!transcricaoId || !transcricoesAtivas[transcricaoId] || transcricoesAtivas[transcricaoId].status === 'em_andamento')) { 
-                 adicionarStatusHistorico("Conexão WebSocket fechada inesperadamente.", "warning");
+            
+            const isUnexpectedClose = event.code !== 1000 && event.code !== 1005;
+            const isTranscriptionActive = transcricaoId && transcricoesAtivas[transcricaoId] && 
+                                         transcricoesAtivas[transcricaoId].status === 'em_andamento';
+            
+            if (isUnexpectedClose && isTranscriptionActive) {
+                adicionarStatusHistorico("Conexão WebSocket fechada inesperadamente.", "warning");
+                
+                // Marca como falha por desconexão
+                transcricoesAtivas[transcricaoId].status = 'falha';
+                transcricoesAtivas[transcricaoId].erro = `Desconexão inesperada (código: ${event.code})`;
+                transcricoesAtivas[transcricaoId].erro_em = new Date().toISOString();
+                salvarTranscricoesLocais();
+                
+                // Oferece possibilidade de retomar
+                btnRetomar.classList.remove('d-none');
+                statusText.textContent = 'Conexão perdida. Use "Retomar" para continuar.';
             } else {
-                 adicionarStatusHistorico("Conexão WebSocket fechada.", "info");
+                adicionarStatusHistorico("Conexão WebSocket fechada.", "info");
             }
-            // Mantém o botão de cancelar oculto
+            
             btnCancelar.classList.add('d-none');
         };
     }
@@ -562,7 +611,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Função para retomar transcrição
     async function retomarTranscricao() {
         adicionarStatusHistorico(`Tentando retomar transcrição ID: ${transcricaoId}`, 'info');
-        hideAskAiSection(); // Oculta seção AI
+        hideAskAiSection();
+        
         if (!transcricaoId) {
             alert('Nenhuma transcrição selecionada para retomar');
             return;
@@ -570,40 +620,86 @@ document.addEventListener('DOMContentLoaded', function() {
         
         try {
             toggleProgress(true, 0);
-            statusText.textContent = 'Retomando transcrição...';
-            adicionarStatusHistorico('Iniciando retomada da transcrição', 'info');
+            statusText.textContent = 'Verificando status da transcrição...';
+            adicionarStatusHistorico('Iniciando processo de retomada', 'info');
             
             const response = await fetch(`/retomar-transcricao/${transcricaoId}`, {
                 method: 'POST'
             });
 
             if (!response.ok) {
-                throw new Error('Erro ao retomar transcrição');
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Erro ao retomar transcrição');
             }
 
             const data = await response.json();
+            console.log('Resposta de retomada:', data);
+            
+            // Verifica se a transcrição já estava concluída
+            if (data.status === 'concluida') {
+                adicionarStatusHistorico('Transcrição já estava concluída!', 'success');
+                statusText.textContent = 'Transcrição já estava completa!';
+                
+                // Atualiza interface diretamente
+                transcricaoTexto.textContent = data.texto || 'Texto não disponível';
+                transcricaoTitulo.textContent = 'Transcrição Completa';
+                
+                // Atualiza dados locais
+                if (transcricoesAtivas[transcricaoId]) {
+                    transcricoesAtivas[transcricaoId].status = 'concluida';
+                    transcricoesAtivas[transcricaoId].texto = data.texto;
+                    salvarTranscricoesLocais();
+                }
+                
+                // Habilita botões apropriados
+                btnBaixar.classList.remove('d-none');
+                gerarInsightsBtn.disabled = false;
+                btnFalar.classList.remove('d-none');
+                btnRetomar.classList.add('d-none');
+                
+                showAskAiSection();
+                toggleProgress(false);
+                return;
+            }
+            
+            // Se não está concluída, inicia processo de retomada
             clientId = data.client_id;
             
-            // Atualiza localmente
+            // Atualiza dados locais com informações de retomada
             if (transcricoesAtivas[transcricaoId]) {
-                transcricoesAtivas[transcricaoId].status = 'retomando';
+                transcricoesAtivas[transcricaoId].status = 'preparando_retomada';
                 transcricoesAtivas[transcricaoId].client_id = clientId;
+                
+                // Se há progresso anterior, mostra na interface
+                if (data.progresso_anterior && data.texto_parcial) {
+                    transcricoesAtivas[transcricaoId].texto = data.texto_parcial;
+                    transcricaoTexto.textContent = data.texto_parcial;
+                    adicionarStatusHistorico(`Progresso anterior encontrado: ${data.texto_parcial.length} caracteres`, 'info');
+                }
+                
                 salvarTranscricoesLocais();
             }
+            
+            statusText.textContent = 'Reconectando para retomar...';
+            adicionarStatusHistorico('Preparando reconexão WebSocket...', 'info');
+            
+            // Esconde botão de retomar e mostra cancelar
+            btnRetomar.classList.add('d-none');
+            btnCancelar.classList.remove('d-none');
             
             // Reconecta ao WebSocket
             conectarWebSocket();
             
-            // Esconde botão de retomar
-            btnRetomar.classList.add('d-none');
-            
-            adicionarStatusHistorico('Retomada da transcrição iniciada com sucesso', 'success');
+            adicionarStatusHistorico('Retomada iniciada com sucesso', 'success');
 
         } catch (error) {
-            console.error('Erro:', error);
-            statusText.textContent = 'Erro ao retomar transcrição. Tente novamente.';
+            console.error('Erro ao retomar:', error);
+            statusText.textContent = `Erro: ${error.message}`;
             adicionarStatusHistorico(`Erro ao retomar: ${error.message}`, 'error');
             toggleProgress(false);
+            
+            // Mantém botão de retomar visível em caso de erro
+            btnRetomar.classList.remove('d-none');
         }
     }
 

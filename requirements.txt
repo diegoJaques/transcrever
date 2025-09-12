@@ -1,7 +1,7 @@
 fastapi==0.104.1
 uvicorn==0.24.0
 python-multipart
-yt-dlp==2023.11.16
+yt-dlp>=2024.4.9
 openai-whisper==20231117
 python-dotenv==1.0.0
 requests==2.31.0
@@ -9,4 +9,4 @@ Jinja2==3.1.2
 torchaudio
 soundfile
 edge-tts
-pytube 
+pytube>=15.0.0 
