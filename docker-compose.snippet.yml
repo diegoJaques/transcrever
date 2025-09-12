@@ -1,0 +1,26 @@
+# SNIPPET PARA ADICIONAR AO docker-compose.yml EM /home/jaques/
+# Cole este conteúdo dentro de "services:" do seu docker-compose.yml existente
+
+  transcricao:
+    build:
+      context: ./transcricao_videos
+      dockerfile: Dockerfile
+    container_name: transcricao
+    restart: always
+    env_file:
+      - ./transcricao_videos/.env  # Usa o .env da pasta da aplicação
+    volumes:
+      - ./transcricao_uploads:/app/uploads
+      - ./transcricao_videos_data:/app/videos
+      - ./transcricao_audios:/app/audios
+      - ./transcricao_transcricoes:/app/transcricoes
+      - ./transcricao_generated_audio:/app/generated_audio
+      - ./transcricao_tmp:/app/tmp
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.transcricao.rule=Host(`transcricao.celintelligence.com`)"
+      - "traefik.http.routers.transcricao.entrypoints=websecure"
+      - "traefik.http.routers.transcricao.tls.certresolver=leresolver"
+      - "traefik.http.services.transcricao.loadbalancer.server.port=8000"
